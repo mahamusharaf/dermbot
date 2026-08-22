@@ -122,7 +122,10 @@ Conversation state (including which assistant turns were clarifying questions) i
 - Every classification step (greeting, domain, emergency tier, medication, personalization, comparison, systemic symptoms) is a separate LLM call — this is accurate but adds latency; some could plausibly be merged into fewer calls.
 - No automated eval suite yet for routing accuracy (e.g. does `check_emergency` reliably catch the tiers it's meant to).
 - Single-process, in-memory conversation history — no persistence/checkpointing across restarts yet (a natural next step given LangGraph's built-in checkpointer support).
+- **Agentic retrieval (future work).** Retrieval routing is currently deterministic — `check_comparison` and `check_systemic_symptoms` pre-classify the query and hardcode which retrieval path runs. A planned next step is to replace this with an agentic tool-calling node: give the LLM a set of retrieval tools (general vector search, search-by-condition-name, compare-N-conditions, and potentially a structured medication database lookup) and let it decide which tool(s) to call, in what order, based on the question — rather than pre-classifying every case with conditional edges. Note this is scoped to the retrieval layer only; the safety-critical routing (emergency triage, medication caution, population gating) is intentionally kept deterministic and would not be made agentic, since guaranteed, auditable routing matters more there than flexibility.
 
 ## Disclaimer
-
 This project is an educationalsystem for exploring safety-aware RAG architecture. It is not a medical device and is not intended to provide diagnosis or treatment advice.
+ 
+
+This project is an educational/portfolio system for exploring safety-aware RAG architecture. It is not a medical device and is not intended to provide diagnosis or treatment advice.
