@@ -80,37 +80,6 @@ Two loops exist in the graph, and both are protected against running forever:
 └── .env                 # GROQ_API_KEY
 ```
 
-## Setup
-
-```bash
-pip install langgraph groq chromadb sentence-transformers python-dotenv
-```
-
-Create a `.env` file with:
-
-```
-GROQ_API_KEY=your_key_here
-```
-
-Make sure a populated Chroma collection named `dermatology` exists at `chroma_db_bge/` before running.
-
-## Usage
-
-```bash
-python main.py
-```
-
-The script runs a short scripted conversation by default (see `if __name__ == "__main__":`). To use it interactively, wrap `ask(query)` in a loop reading from `input()`.
-
-```python
-from main import ask
-
-ask("what does ringworm look like?")
-ask("can I use hydrocortisone on it?")
-```
-
-Conversation state (including which assistant turns were clarifying questions) is tracked in-memory across calls to `ask()` within a single process.
-
 ## Design notes worth knowing
 
 - **Clarification round-counting is structural, not string-matched.** Rather than trying to detect "did the assistant already ask a follow-up question" by pattern-matching LLM-generated text (which varies with temperature), the graph sets an explicit `is_clarification` flag on the assistant's turn and counts that.
