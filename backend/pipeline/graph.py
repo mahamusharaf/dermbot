@@ -9,14 +9,63 @@ from groq import Groq
 import chromadb
 from sentence_transformers import SentenceTransformer, CrossEncoder
 
-embedder = SentenceTransformer("BAAI/bge-base-en-v1.5")
-reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+# ---------------------------------------------------------------------------
+# Lazy-loaded model/DB singletons.
+#
+# IMPORTANT: These used to be loaded at module level (i.e. the instant this
+# file was imported). Since api.py does `from pipeline.graph import app as
+# graph_app` at the top of the file, that meant uvicorn couldn't bind its
+# port until the embedding model, cross-encoder, and Chroma client had all
+# finished loading -- on Render this took long enough (and used enough RAM)
+# to blow past both the port-scan timeout and the 512MB memory limit.
+#
+# Now each of these loads once, on first actual use, and is cached in a
+# module-level variable for reuse. `app = graph.compile()` below stays cheap
+# (it just wires up the graph structure), so importing this file is now fast
+# and uvicorn can bind the port within seconds. The heavy loading happens
+# lazily the first time a request actually needs retrieval.
+# ---------------------------------------------------------------------------
+
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 db_path = os.path.join(SCRIPT_DIR, "chroma_db_bge")
-chroma_client = chromadb.PersistentClient(path=db_path)
-collection = chroma_client.get_collection(name="dermatology")
+
+_embedder = None
+_reranker = None
+_collection = None
+
+
+def get_embedder():
+    global _embedder
+    if _embedder is None:
+        print("[lazy_load] loading embedder BAAI/bge-base-en-v1.5 ...", flush=True)
+        t0 = time.time()
+        _embedder = SentenceTransformer("BAAI/bge-base-en-v1.5")
+        print(f"[lazy_load] embedder loaded ({time.time() - t0:.1f}s)", flush=True)
+    return _embedder
+
+
+def get_reranker():
+    global _reranker
+    if _reranker is None:
+        print("[lazy_load] loading reranker cross-encoder/ms-marco-MiniLM-L-6-v2 ...", flush=True)
+        t0 = time.time()
+        _reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+        print(f"[lazy_load] reranker loaded ({time.time() - t0:.1f}s)", flush=True)
+    return _reranker
+
+
+def get_collection():
+    global _collection
+    if _collection is None:
+        print(f"[lazy_load] connecting to chroma at {db_path} ...", flush=True)
+        t0 = time.time()
+        chroma_client = chromadb.PersistentClient(path=db_path)
+        _collection = chroma_client.get_collection(name="dermatology")
+        print(f"[lazy_load] chroma collection ready ({time.time() - t0:.1f}s)", flush=True)
+    return _collection
+
 
 load_dotenv()
 groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
@@ -407,6 +456,9 @@ def retrieve_comparison(state: GraphState) -> GraphState:
     subjects = state["comparison_subjects"]
     all_chunks = []
     seen_texts = set()
+    embedder = get_embedder()
+    reranker = get_reranker()
+    collection = get_collection()
 
     for subject in subjects:
         for aspect, template in COMPARISON_ASPECT_TEMPLATES.items():
@@ -450,6 +502,10 @@ Output (short clinical search query only, nothing else):"""
 
     simplified = call_groq_with_retry([{"role": "user", "content": prompt}], temperature=0).strip()
     print(f"[retrieve_fallback] '{query}' -> simplified '{simplified}'")
+
+    embedder = get_embedder()
+    reranker = get_reranker()
+    collection = get_collection()
 
     query_embedding = embedder.encode([BGE_QUERY_PREFIX + simplified], normalize_embeddings=True).tolist()
     results = collection.query(query_embeddings=query_embedding, n_results=20)
@@ -527,6 +583,10 @@ Output (corrected/expanded/merged question only, nothing else):"""
 
 def retrieve(state: GraphState) -> GraphState:
     query = state["query"]
+    embedder = get_embedder()
+    reranker = get_reranker()
+    collection = get_collection()
+
     query_embedding = embedder.encode([BGE_QUERY_PREFIX + query], normalize_embeddings=True).tolist()
     results = collection.query(query_embeddings=query_embedding, n_results=20)
     docs = results["documents"][0]
@@ -550,6 +610,9 @@ def retrieve_systemic_supplement(state: GraphState) -> GraphState:
     query = state["query"]
     existing_chunks = state["retrieved_chunks"]
     seen_texts = {c["text"] for c in existing_chunks}
+    embedder = get_embedder()
+    reranker = get_reranker()
+    collection = get_collection()
 
     supplement_query = (
         "skin findings associated with underlying systemic or metabolic disease, "
