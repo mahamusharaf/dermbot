@@ -114,7 +114,7 @@ const FOOTER_DISCLAIMER = {
     roman_ur: "Sirf general maloomat — dermatologist ka متبادل نہیں۔",
 };
 
-const API_BASE_URL = "http://127.0.0.1:8000";
+const API_BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 // Single shared breakpoint for the whole app. Below this width the sidebar
 // becomes a slide-over drawer instead of a permanent column, and spacing /
