@@ -3,6 +3,7 @@ FastAPI wrapper around the LangGraph dermatology pipeline, with Supabase
 auth + Postgres-backed chat history.
 """
 
+import asyncio
 import os
 from typing import List, Literal, Optional
 
@@ -14,6 +15,7 @@ from pydantic import BaseModel
 from supabase import create_client, Client
 
 from pipeline.graph import app as graph_app
+from pipeline.graph import get_embedder, get_reranker, get_collection
 
 load_dotenv()
 
@@ -41,6 +43,47 @@ api.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Startup warmup.
+#
+# get_embedder/get_reranker/get_collection (in pipeline/graph.py) are lazy
+# singletons: they load once, on first call, and cache the result. Without
+# this startup hook, "first call" would be the first real user's chat
+# request -- which meant that request raced against Render's own proxy
+# timeout while loading a multi-hundred-MB model, and lost (502, connection
+# just dies, no clean error).
+#
+# Triggering the same loads here instead means:
+#   - uvicorn still binds the port immediately (this event runs after that),
+#     so Render's port-scan still succeeds fast and deploys don't stall.
+#   - The heavy loading happens once, right after deploy, off the request
+#     path -- so a user's first message doesn't pay for it.
+#   - run_in_executor keeps this off the main event loop, so it doesn't
+#     block other startup work or make the process look hung.
+#   - If this now fails (OOM, timeout, etc.), it fails loudly in the deploy
+#     logs right after "Running 'uvicorn ...'" instead of showing up later
+#     as a confusing per-request 502.
+# ---------------------------------------------------------------------------
+
+@api.on_event("startup")
+async def warm_up_models():
+    print("[startup] warming up embedder/reranker/chroma in background...", flush=True)
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, get_embedder)
+        await loop.run_in_executor(None, get_reranker)
+        await loop.run_in_executor(None, get_collection)
+        print("[startup] warmup complete", flush=True)
+    except Exception as e:
+        # Don't let a warmup failure crash the whole app -- if this happens,
+        # the lazy singletons will just retry on first actual use (same as
+        # before this change), so we still want the server up so you can see
+        # this error clearly rather than the process dying silently.
+        print(f"[startup] warmup FAILED: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
 
 
 # ---- Auth dependency -------------------------------------------------------
